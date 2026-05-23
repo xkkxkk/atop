@@ -2,6 +2,8 @@
 
 本文档面向首次部署、后续升级和基础运维。推荐使用 Docker Compose 部署 MySQL、后端和前端。
 
+正式上线前请先阅读 [生产部署注意事项](PRODUCTION_NOTES.md)，逐项确认真实域名、HTTPS、MySQL、端口暴露、密钥和备份策略。
+
 ## 1. 部署架构
 
 ```text

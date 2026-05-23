@@ -31,6 +31,7 @@ ATOP 是一个自动化测试编排与调度平台，面向 Jenkins 集成、流
 ## 文档入口
 
 - [部署文档](DEPLOYMENT.md)：服务器准备、环境变量、Docker Compose 启动、升级、备份和排障。
+- [生产部署注意事项](PRODUCTION_NOTES.md)：真实域名、HTTPS、MySQL、端口、密钥、Jenkins 回调和上线检查清单。
 - [使用手册](USER_MANUAL.md)：登录、仪表盘、流水线、运行记录、Jenkins、通知、权限和平台治理操作说明。
 
 ## 本地开发
