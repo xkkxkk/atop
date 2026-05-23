@@ -1,0 +1,122 @@
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: atop-mysql
+    restart: unless-stopped
+    networks:
+      - atop-net
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE:      atop
+      MYSQL_USER:          atop
+      MYSQL_PASSWORD:      ${DB_PASSWORD}
+      TZ:                  Asia/Shanghai
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../scripts/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+      --innodb-buffer-pool-size=512M
+      --innodb-log-file-size=256M
+      --max-connections=500
+      --slow-query-log=ON
+      --long-query-time=1
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "atop", "--password=${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  atop-backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: atop-backend
+    restart: unless-stopped
+    networks:
+      - atop-net
+    environment:
+      APP_ENV:            production
+      PORT:               8080
+      LOG_LEVEL:          info
+      DB_HOST:            mysql
+      DB_PORT:            3306
+      DB_USER:            atop
+      DB_PASSWORD:        ${DB_PASSWORD}
+      DB_NAME:            atop
+      JWT_SECRET:         ${JWT_SECRET}
+      AES_KEY:            ${AES_KEY}
+      ADMIN_EMAIL:        ${ADMIN_EMAIL}
+      ADMIN_PASSWORD:     ${ADMIN_PASSWORD}
+      EXTERNAL_URL:       ${EXTERNAL_URL}
+      WEBHOOK_BASE_URL:   ${WEBHOOK_BASE_URL}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-true}
+      COOKIE_DOMAIN:      ${COOKIE_DOMAIN}
+      COOKIE_SAME_SITE:   ${COOKIE_SAME_SITE:-lax}
+      COOKIE_SECURE:      ${COOKIE_SECURE:-auto}
+      SMTP_HOST:          ${SMTP_HOST}
+      SMTP_PORT:          ${SMTP_PORT}
+      SMTP_USER:          ${SMTP_USER}
+      SMTP_PASS:          ${SMTP_PASS}
+      SMTP_FROM:          ${SMTP_FROM}
+      SMTP_SECURITY:      ${SMTP_SECURITY:-auto}
+      JWT_ACCESS_TTL_HOURS: ${JWT_ACCESS_TTL_HOURS:-8}
+      JWT_REFRESH_TTL_DAYS: ${JWT_REFRESH_TTL_DAYS:-7}
+      AUTH_SINGLE_SESSION_ENABLED: ${AUTH_SINGLE_SESSION_ENABLED:-false}
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET}
+    ports:
+      - "0.0.0.0:8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  atop-frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    image: atop-frontend:latest
+    container_name: atop-frontend
+    restart: unless-stopped
+    networks:
+      - atop-net
+    ports:
+      - "8888:80"
+    depends_on:
+      atop-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+networks:
+  atop-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local

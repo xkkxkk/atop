@@ -1,0 +1,209 @@
+// ============================================================
+// ATOP 通用 Jenkins Pipeline 模板 v1.0
+//
+// 使用步骤：
+//   1. Jenkins → New Item → Pipeline
+//   2. 将此文件粘贴到 Pipeline Script
+//   3. 在 ATOP 平台「流水线 → 编辑 → Jenkins Job 绑定」填写此 Job 名称
+//
+// 触发时 ATOP 自动注入以下参数：
+//   ATOP_RUN_ID    - pipeline run ID
+//   ATOP_BASE_URL  - ATOP 平台地址，如 http://192.168.1.100:8080
+//   ATOP_TOKEN     - API Token（如平台开启了认证）
+// ============================================================
+
+pipeline {
+    agent none
+
+    parameters {
+        string(name: 'ATOP_RUN_ID',   defaultValue: '', description: 'ATOP pipeline run ID')
+        string(name: 'ATOP_BASE_URL', defaultValue: 'http://localhost:8080', description: 'ATOP 平台地址')
+        string(name: 'ATOP_TOKEN',    defaultValue: '', description: 'ATOP API Token（可选）')
+    }
+
+    options {
+        timeout(time: 4, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+    }
+
+    stages {
+
+        stage('Validate') {
+            agent { label 'built-in || master' }
+            steps {
+                script {
+                    if (!params.ATOP_RUN_ID?.trim()) {
+                        error "ATOP_RUN_ID 不能为空，请通过 ATOP 平台触发"
+                    }
+                    echo "Run ID: ${params.ATOP_RUN_ID}"
+                    echo "Platform: ${params.ATOP_BASE_URL}"
+                }
+            }
+        }
+
+        stage('Fetch Tasks') {
+            agent { label 'built-in || master' }
+            steps {
+                script {
+                    def url = "${params.ATOP_BASE_URL}/api/pipeline-runs/${params.ATOP_RUN_ID}/dispatch-config"
+                    def auth = params.ATOP_TOKEN?.trim() ? "-H 'Authorization: Bearer ${params.ATOP_TOKEN}'" : ""
+
+                    def raw = sh(script: "curl -sf --max-time 30 ${auth} '${url}'", returnStdout: true).trim()
+                    if (!raw) { error "从 ATOP 获取任务配置失败" }
+
+                    def data = readJSON text: raw
+                    echo "获取到 ${data.totalTasks} 个任务"
+                    writeFile file: "${WORKSPACE}/atop_dispatch.json", text: raw
+                    stash name: 'atop-dispatch', includes: 'atop_dispatch.json'
+                }
+            }
+        }
+
+        stage('Execute') {
+            steps {
+                script {
+                    unstash 'atop-dispatch'
+                    def data  = readJSON file: "${WORKSPACE}/atop_dispatch.json"
+                    def tasks = data.tasks
+                    if (!tasks || tasks.size() == 0) { echo "没有可执行任务"; return }
+
+                    def parallelMap = [failFast: false]
+                    tasks.each { task ->
+                        def t = task
+                        parallelMap["[${t.project}] ${t.testSetName}"] = {
+                            node(t.agentLabel) {
+                                runAtopTask(t)
+                            }
+                        }
+                    }
+                    parallel parallelMap
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            node('built-in || master') {
+                sh 'rm -f atop_dispatch.json || true'
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+def runAtopTask(task) {
+    def taskId     = task.taskId
+    def webhookUrl = task.webhookUrl
+    def config     = task.config
+    def envVars    = task.envVars ?: [:]
+    def startMs    = System.currentTimeMillis()
+    def exitCode   = 0
+    def errorMsg   = ''
+
+    echo ">> 开始: ${task.testSetName} (${taskId})"
+
+    withEnv(envVars.collect { k, v -> "${k}=${v}" }) {
+        try {
+            // Set Up
+            if (config.setup) { atopSetup(config.setup) }
+
+            // Exec Cmds
+            def abort = false
+            config.execCmds?.eachWithIndex { cmd, idx ->
+                if (abort) return
+                echo "  Exec[${idx+1}]: ${cmd.cmdLabel ?: 'step'}"
+                exitCode = atopExecCmd(cmd, task)
+                if (exitCode != 0) {
+                    def policy = cmd.failPolicy ?: 'block'
+                    if (policy == 'abort') { abort = true; error "步骤失败(exit=${exitCode}), failPolicy=abort" }
+                    if (policy == 'block') { abort = true; echo "步骤失败, failPolicy=block, 停止后续步骤" }
+                    if (policy == 'continue') { echo "步骤失败, failPolicy=continue, 继续执行" }
+                }
+            }
+        } catch (err) {
+            exitCode = 1
+            errorMsg = err.message
+        } finally {
+            try { if (config.teardown) { atopTeardown(config.teardown) } } catch (e) { echo "Teardown 异常: ${e.message}" }
+            def ms     = System.currentTimeMillis() - startMs
+            def status = exitCode == 0 ? 'success' : 'failed'
+            atopCallback(webhookUrl, taskId, status, ms, errorMsg)
+        }
+    }
+}
+
+def atopSetup(setup) {
+    setup.downloads?.each { dl ->
+        def dest = dl.destPath ?: "${WORKSPACE}"
+        sh "mkdir -p '${dest}'"
+        switch (dl.repoType) {
+            case 'artifact':
+                sh "echo '下载制品: ${dl.source}' && wget -q '${dl.source}' -P '${dest}' || true"
+                break
+            case 'git':
+                sh "git clone --depth=1 -b '${dl.stage ?: 'main'}' '${dl.source}' '${dest}'"
+                break
+            case 'curl_file':
+                sh "curl -fsSL '${dl.source}' -o '${dest}/${dl.source.tokenize('/').last()}'"
+                break
+        }
+    }
+    if (setup.preScript?.trim()) { sh setup.preScript }
+}
+
+def atopExecCmd(cmd, task) {
+    def rundir = cmd.cmdRundir ?: "${WORKSPACE}"
+    switch (cmd.dockerMode) {
+        case 'internal': return runWithInternalDocker(cmd, task, rundir)
+        case 'native':   return runWithNativeDocker(cmd, rundir)
+        default:
+            return sh(script: "cd '${rundir}'\n${cmd.runBash ? "source '${cmd.runBash}'" : ''}\n${cmd.cmd}", returnStatus: true)
+    }
+}
+
+def runWithInternalDocker(cmd, task, rundir) {
+    def repoUrl = cmd.dockerRepoUrl ?: ''
+    if (!repoUrl) {
+        echo "dockerRepoUrl 未配置，直接执行"
+        return sh(script: "cd '${rundir}' && ${cmd.cmd}", returnStatus: true)
+    }
+    def repoDir = "${WORKSPACE}/_docker_${task.taskId[0..7]}"
+    sh "rm -rf '${repoDir}' && git clone --depth=1 '${repoUrl}' '${repoDir}'"
+    def script = cmd.dockerStartScript ?: 'start_docker.sh'
+    return withEnv([
+        "ATOP_DOCKER_IMG_READFILE=${cmd.dockerImgReadfile ?: ''}",
+        "ATOP_DOCKER_IMG_LABEL=${cmd.dockerImgLabel ?: ''}",
+        "ATOP_TASK_ID=${task.taskId}",
+        "ATOP_WORKSPACE=${WORKSPACE}",
+        "ATOP_CMD=${cmd.cmd}"
+    ]) {
+        sh(script: "chmod +x '${repoDir}/${script}' && bash '${repoDir}/${script}'", returnStatus: true)
+    }
+}
+
+def runWithNativeDocker(cmd, rundir) {
+    if (!cmd.dockerImage) { echo "dockerImage 未配置"; return 1 }
+    return sh(script: """
+        docker run --rm -v '${WORKSPACE}:${WORKSPACE}' -w '${rundir}' \\
+          --label atop_task=true '${cmd.dockerImage}' bash -c '${cmd.cmd}'
+    """, returnStatus: true)
+}
+
+def atopTeardown(teardown) {
+    if (teardown.stopDocker) {
+        sh "docker ps --filter 'label=atop_task=true' -q | xargs -r docker stop 2>/dev/null || true"
+    }
+    if (teardown.postScript?.trim()) { sh teardown.postScript }
+    if (teardown.cleanWorkspace) {
+        sh "find '${WORKSPACE}' -mindepth 1 -maxdepth 1 ! -name 'atop_dispatch.json' -exec rm -rf {} + || true"
+    }
+}
+
+def atopCallback(webhookUrl, taskId, status, durationMs, errorSummary) {
+    def err = errorSummary?.take(500)?.replace('"', '\\"')?.replace('\n', ' ') ?: ''
+    def payload = """{"task_id":"${taskId}","status":"${status}","duration_ms":${durationMs},"pass_rate":${status == 'success' ? 100.0 : 0.0},"error_summary":"${err}","jenkins_build_id":${currentBuild.number},"jenkins_build_url":"${env.BUILD_URL ?: ''}"}"""
+    def rc = sh(script: "curl -s -X POST '${webhookUrl}' -H 'Content-Type: application/json' -d '${payload}' --max-time 15 --retry 2", returnStatus: true)
+    echo rc == 0 ? "Webhook OK: ${status} (${taskId})" : "Webhook 失败，请检查平台连通性"
+}

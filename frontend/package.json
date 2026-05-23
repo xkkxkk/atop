@@ -1,0 +1,38 @@
+{
+  "name": "atop-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "npx vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directives",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.4.0",
+    "@ant-design/pro-components": "^2.7.14",
+    "@antv/x6": "1.35.1",
+    "@monaco-editor/react": "^4.6.0",
+    "antd": "^5.20.0",
+    "axios": "^1.7.7",
+    "dayjs": "^1.11.13",
+    "monaco-editor": "^0.52.0",
+    "rc-virtual-list": "^3.14.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0",
+    "recharts": "^2.12.7",
+    "swr": "^2.2.5",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "eslint": "^9.9.0",
+    "msw": "^2.3.5",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.1"
+  }
+}

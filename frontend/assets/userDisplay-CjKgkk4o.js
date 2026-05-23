@@ -1,0 +1,1 @@
+const e=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,u=/^u\d+$/i;function n(s,i,r="未知用户"){const f=s==null?void 0:s.trim();if(f)return f;const t=i==null?void 0:i.trim();return t?t==="system"?"系统":e.test(t)||u.test(t)?"已删除用户":t:r}export{n as d};

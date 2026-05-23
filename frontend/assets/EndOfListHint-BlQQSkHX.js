@@ -1,0 +1,1 @@
+import{j as n}from"./index-BsfnoZNW.js";function e({visible:i=!0,text:r="已经到底了，当前结果已全部展示",className:t}){return i?n.jsx("div",{className:t?`atop-end-of-list ${t}`:"atop-end-of-list",children:n.jsx("span",{children:r})}):null}export{e as E};
